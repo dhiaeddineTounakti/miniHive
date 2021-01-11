@@ -140,7 +140,7 @@ class TestMREvaluation(object):
             assert (item_found)
 
     def test_select_person_gender_female_person(self):
-        querystring = "\select_{Person.gender='female'}(Person);"
+        querystring = "(\\rename_{P:*} Person) \join_{P.gender = Q.gender and P.age = Q.age} (\\rename_{Q:*} Person);"
         expected = [self.person_amy, self.person_fay, self.person_hil]
         self._check(querystring, expected)
 

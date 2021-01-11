@@ -45,7 +45,7 @@ class End2EndUnitTests(unittest.TestCase):
         return lines
 
     def test_select_person(self):
-        sqlstring = "select distinct * from Person"
+        sqlstring = "select * from Person Q, Person P where P.age = Q.age and P.gender = Q.gender"
         computed = self._evaluate(sqlstring)
         self.assertEqual(len(computed), 9)
 

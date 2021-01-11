@@ -161,8 +161,13 @@ class JoinTask(RelAlgQueryTask):
                 if key in json_tuple:
                     tmp_value += [json_tuple[key]]
 
+        res_key=[]
+        for val in tmp_value:
+            res_key.append(str(val))
+
+        sorted(res_key)
         if tmp_value is not None:
-            yield (",".join(tmp_value), json.dumps([relations, json_tuple]))
+            yield (",".join(res_key), json.dumps([relations, json_tuple]))
 
         ''' ...................... fill in your code above ........................'''
 
