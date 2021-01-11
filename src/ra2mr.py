@@ -173,11 +173,70 @@ class SelectTask(RelAlgQueryTask):
         condition = radb.parse.one_statement_from_string(self.querystring).cond
 
         ''' ...................... fill in your code below ........................'''
-    
-        query = radb.ast.Select(cond= condition, input= relation)
-        yield ("foo", "bar")
+
+        if test_condition(relation, json_tuple, condition):
+            yield (relation, tuple)
 
         ''' ...................... fill in your code above ........................'''
+
+
+def test_condition(relation, json_tuple, condition):
+    """
+    return the result of the condition execution.
+    :return:
+    """
+    operator = condition.op
+    value1 = condition.inputs[0]
+    value2 = condition.inputs[1]
+
+    if type(value1) == radb.ValExprBinaryOp:
+        value1 = test_condition(relation, json_tuple, value1)
+
+    if type(value2) == radb.ValExprBinaryOp:
+        value2 = test_condition(relation, json_tuple, value2)
+
+    value1 = convert(value1, json_tuple, relation)
+    value2 = convert(value2, json_tuple, relation)
+
+    if value1 is None or value2 is None:
+        return False
+
+    if operator == "=":
+        return value1 == value2
+    elif operator == "and":
+        return value1 and value2
+    elif operator == "or":
+        return value1 or value2
+    elif operator == "<=":
+        return value1 <= value2
+    elif operator == ">=":
+        return value1 >= value2
+    elif operator == ">":
+        return value1 > value2
+    elif operator == "<":
+        return value1 < value2
+    elif operator == "<>":
+        return value1 != value2
+
+
+def convert(value, json_tuple, relation):
+    """
+    convert value from radb classes to python classes
+    :param value:
+    :return:
+    """
+    if type(value) == radb.RANumber:
+        return int(value.val)
+    elif type(value) == radb.RAString:
+        return str(value.val)
+    elif type(value) == radb.AttrRef:
+        key = relation + "." + value.name
+        if key in json_tuple:
+            return json_tuple[key]
+        else:
+            return None
+    else:
+        return value
 
 
 class RenameTask(RelAlgQueryTask):

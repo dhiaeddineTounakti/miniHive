@@ -1,4 +1,5 @@
 import json
+import time
 
 import luigi
 import radb
@@ -103,8 +104,9 @@ class TestMREvaluation(object):
     person_hil = '{"Person.name": "Hil", "Person.age": 30, "Person.gender": "female"}'
     person_ben = '{"Person.name": "Ben", "Person.age": 21, "Person.gender": "male"}'
 
-    def setup_method(self):
+    def test_setup_method(self):
         prepareMockFileSystem()
+        time.sleep(10)
 
     def _evaluate(self, querystring):
         raquery = radb.parse.one_statement_from_string(querystring)
