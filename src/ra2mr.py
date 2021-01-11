@@ -6,7 +6,10 @@ import luigi.contrib.hdfs
 from luigi.mock import MockTarget
 import radb
 import radb.ast
+from radb.ast import RelExpr, ValExprBinaryOp, Select, Rename, AttrRef, RelRef, Cross, Join, RANumber, RAString
 import radb.parse
+from radb.parse import RAParser as sym
+from radb import RAParser
 
 '''
 Control where the input data comes from, and where output data should go.
@@ -136,15 +139,30 @@ class JoinTask(RelAlgQueryTask):
         return [task1, task2]
 
     def mapper(self, line):
-        relation, tuple = line.split('\t')
+        relations, tuple = line.split('\t')
         json_tuple = json.loads(tuple)
 
         raquery = radb.parse.one_statement_from_string(self.querystring)
         condition = raquery.cond
 
         ''' ...................... fill in your code below ........................'''
+        attrs = get_join_attr(raquery.cond)
+        tmp_value = []
 
-        yield ("foo", "bar")
+        for attr in attrs:
+            keys = []
+            if '.' in attr:
+                keys += [attr]
+
+            else:
+                keys += [relation + "." + attr.name for relation in relations.split(",")]
+
+            for key in keys:
+                if key in json_tuple:
+                    tmp_value += [json_tuple[key]]
+
+        if tmp_value is not None:
+            yield (",".join(tmp_value), json.dumps([relations, json_tuple]))
 
         ''' ...................... fill in your code above ........................'''
 
@@ -152,10 +170,58 @@ class JoinTask(RelAlgQueryTask):
         raquery = radb.parse.one_statement_from_string(self.querystring)
 
         ''' ...................... fill in your code below ........................'''
+        rel_list = {}
+        for value in values:
+            rel, tuple = json.loads(value)
+            if rel in rel_list:
+                rel_list[rel] += [tuple]
 
-        yield ("foo", "bar")
+            elif check_all_keys(rel_list.keys(), rel):
+                pass
+
+            else:
+                rel_list[rel] = [tuple]
+
+        combined_key = []
+        lists = []
+        for key, value in rel_list.items():
+            combined_key.append(key)
+            lists.append(value)
+
+        combined_key = ",".join(sorted(combined_key))
+
+        if len(lists) > 1:
+            for tuples in lists[0]:
+                for tuples1 in lists[1]:
+                    resulting_tuple = {**tuples, **tuples1}
+                    yield (combined_key, json.dumps(resulting_tuple))
 
         ''' ...................... fill in your code above ........................'''
+
+def check_all_keys(keys, key_to_look_for):
+    for each_key in keys:
+        if each_key.find(key_to_look_for)!=-1:
+            return True
+
+    return False
+
+def get_join_attr(cond):
+    """
+    get the attributes of a condtion.
+    :param cond:
+    :return:
+    """
+    tmp_res = set()
+    if type(cond) == AttrRef:
+        if cond.rel is not None:
+            return {cond.rel + "." + cond.name}
+        else:
+            return {cond.name}
+
+    for inp in cond.inputs:
+        tmp_res.update(get_join_attr(inp))
+
+    return tmp_res
 
 
 class SelectTask(RelAlgQueryTask):
@@ -167,15 +233,15 @@ class SelectTask(RelAlgQueryTask):
         return [task_factory(raquery.inputs[0], step=self.step + 1, env=self.exec_environment)]
 
     def mapper(self, line):
-        relation, tuple = line.split('\t')
+        relations, tuple = line.split('\t')
         json_tuple = json.loads(tuple)
 
         condition = radb.parse.one_statement_from_string(self.querystring).cond
 
         ''' ...................... fill in your code below ........................'''
-
-        if test_condition(relation, json_tuple, condition):
-            yield (relation, tuple)
+        for relation in relations.split(","):
+            if test_condition(relation, json_tuple, condition):
+                yield (relations, json.dumps(json_tuple))
 
         ''' ...................... fill in your code above ........................'''
 
@@ -189,10 +255,10 @@ def test_condition(relation, json_tuple, condition):
     value1 = condition.inputs[0]
     value2 = condition.inputs[1]
 
-    if type(value1) == radb.ValExprBinaryOp:
+    if type(value1) == ValExprBinaryOp:
         value1 = test_condition(relation, json_tuple, value1)
 
-    if type(value2) == radb.ValExprBinaryOp:
+    if type(value2) == ValExprBinaryOp:
         value2 = test_condition(relation, json_tuple, value2)
 
     value1 = convert(value1, json_tuple, relation)
@@ -201,21 +267,21 @@ def test_condition(relation, json_tuple, condition):
     if value1 is None or value2 is None:
         return False
 
-    if operator == "=":
+    if operator == sym.EQ:
         return value1 == value2
-    elif operator == "and":
+    elif operator == sym.AND:
         return value1 and value2
-    elif operator == "or":
+    elif operator == sym.OR:
         return value1 or value2
-    elif operator == "<=":
+    elif operator == sym.LQ:
         return value1 <= value2
-    elif operator == ">=":
+    elif operator == sym.GE:
         return value1 >= value2
-    elif operator == ">":
+    elif operator == sym.GT:
         return value1 > value2
-    elif operator == "<":
+    elif operator == sym.LT:
         return value1 < value2
-    elif operator == "<>":
+    elif operator == sym.DIFF:
         return value1 != value2
 
 
@@ -225,11 +291,11 @@ def convert(value, json_tuple, relation):
     :param value:
     :return:
     """
-    if type(value) == radb.RANumber:
+    if type(value) == RANumber:
         return int(value.val)
-    elif type(value) == radb.RAString:
-        return str(value.val)
-    elif type(value) == radb.AttrRef:
+    elif type(value) == RAString:
+        return value.val.replace("'", "")
+    elif type(value) == AttrRef:
         key = relation + "." + value.name
         if key in json_tuple:
             return json_tuple[key]
@@ -255,7 +321,12 @@ class RenameTask(RelAlgQueryTask):
 
         ''' ...................... fill in your code below ........................'''
 
-        yield ("foo", "bar")
+        tmp_dict = {}
+        for key, value in json_tuple.items():
+            tmp_key = key.replace(relation, raquery.relname)
+            tmp_dict[tmp_key] = value
+
+        yield (raquery.relname, json.dumps(tmp_dict))
 
         ''' ...................... fill in your code above ........................'''
 
@@ -269,22 +340,40 @@ class ProjectTask(RelAlgQueryTask):
         return [task_factory(raquery.inputs[0], step=self.step + 1, env=self.exec_environment)]
 
     def mapper(self, line):
-        relation, tuple = line.split('\t')
+        relations, tuple = line.split('\t')
         json_tuple = json.loads(tuple)
 
         attrs = radb.parse.one_statement_from_string(self.querystring).attrs
 
         ''' ...................... fill in your code below ........................'''
+        tmp_dict = {}
+        keys = []
+        for attr in attrs:
+            if attr.rel is not None:
+                keys = [attr.rel + "." + attr.name]
 
-        yield ("foo", "bar")
+            else:
+                keys = [relation + "." + attr.name for relation in relations.split(",")]
+
+            for key in keys:
+                if key in json_tuple:
+                    tmp_dict[key] = json_tuple[key]
+
+        if len(tmp_dict.keys()) >= 0:
+            yield (json.dumps(tmp_dict), relations)
 
         ''' ...................... fill in your code above ........................'''
 
     def reducer(self, key, values):
         ''' ...................... fill in your code below ........................'''
 
-        yield ("foo", "bar")
+        tmp_value = None
+        for value in values:
+            tmp_value = value
+            continue
 
+        if tmp_value is not None:
+            yield (tmp_value, key)
         ''' ...................... fill in your code above ........................'''
 
 
