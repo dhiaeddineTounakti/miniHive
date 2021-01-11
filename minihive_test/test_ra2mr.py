@@ -3,7 +3,7 @@ import json
 import luigi
 import radb
 
-import ra2mr
+import src.ra2mr as ra2mr
 
 '''
 Requires that pytest and pytest-repeat are installed.
@@ -103,7 +103,7 @@ class TestMREvaluation(object):
     person_hil = '{"Person.name": "Hil", "Person.age": 30, "Person.gender": "female"}'
     person_ben = '{"Person.name": "Ben", "Person.age": 21, "Person.gender": "male"}'
 
-    def setup_method(self, method):
+    def setup_method(self):
         prepareMockFileSystem()
 
     def _evaluate(self, querystring):

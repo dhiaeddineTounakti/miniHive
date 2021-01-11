@@ -1,7 +1,7 @@
 import radb
 import radb.ast
 import radb.parse
-import raopt
+import src.raopt as raopt
 import unittest
 
 '''

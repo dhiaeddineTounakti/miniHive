@@ -3,7 +3,7 @@ from unittest import TestCase, main
 import radb
 import radb.ast
 import radb.parse
-import sql2ra
+import src.sql2ra as sql2ra
 import sqlparse
 
 

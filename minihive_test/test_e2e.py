@@ -4,9 +4,9 @@ import unittest
 import luigi
 import sqlparse
 
-import ra2mr
-import raopt
-import sql2ra
+import src.ra2mr as ra2mr
+import src.raopt as raopt
+import src.sql2ra as sql2ra
 import test_ra2mr
 
 '''
