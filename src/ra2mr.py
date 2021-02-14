@@ -519,7 +519,6 @@ class ProjectTask(RelAlgQueryTask):
             attrs = raquery.attrs
 
             ''' ...................... fill in your code below ........................'''
-            keys = []
             for attr in attrs:
                 if attr.rel is not None:
                     keys = [attr.rel + "." + attr.name]
@@ -535,6 +534,15 @@ class ProjectTask(RelAlgQueryTask):
                 yield json.dumps(tmp_dict), relations
 
         ''' ...................... fill in your code above ........................'''
+
+    def combiner(self, key, values):
+        # Execute this to filter duplicates in node level in order to minimize communication costs.
+        tmp_value = None
+        # Go through all duplicates
+        for value in values:
+            tmp_value = value
+
+        yield key, tmp_value
 
     def reducer(self, key, values):
         ''' ...................... fill in your code below ........................'''
