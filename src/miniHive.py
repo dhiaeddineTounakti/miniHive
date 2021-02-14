@@ -57,9 +57,6 @@ def eval(sf, env, query, optimize):
 
     task = ra2mr.task_factory(ra4, env=env, optimize=optimize, after_query=ra4)
 
-    if isinstance(task, ra2mr.InputData):
-        task = ra2mr.task_factory(ra4, env=env, optimize=optimize, after_query=ra4, allow_mappers_only=True)
-
     luigi.build([task], local_scheduler=True)
 
     return task.output().open('r')

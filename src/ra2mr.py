@@ -122,15 +122,36 @@ def task_factory(raquery, after_query: radb.ast.Node = None, step=1, env=ExecEnv
     :param allow_mappers_only: if optimization is on then this controls if we allow returning mapper_only tasks or not
     :return: the given class
     """
+    task = task_class_selector(raquery=raquery, env=env, optimize=optimize, after_query=after_query)
+    if isinstance(task, InputData):
+        task = task_class_selector(raquery, env=env, optimize=optimize, after_query=after_query,
+                                   allow_mappers_only=True)
+
+    return task
+
+
+def task_class_selector(raquery, after_query: radb.ast.Node = None, step=1, env=ExecEnv.HDFS, optimize=False,
+                        allow_mappers_only=False):
+    """
+    returns the right task class given a query.
+    :param raquery: query
+    :param after_query: query to execute in the reducer
+    :param step: step count
+    :param env: environment where to execute the map reduce tasks
+    :param optimize: flag to set optimization on and off
+    :param allow_mappers_only: if optimization is on then this controls if we allow returning mapper_only tasks or not
+    :return: the given class
+    """
     assert (isinstance(raquery, radb.ast.Node))
 
     if isinstance(raquery, radb.ast.Select):
         return SelectTask(querystring=str(raquery) + ";", step=step,
                           exec_environment=env,
-                          optimize=optimize) if not optimize or allow_mappers_only else task_factory(raquery.inputs[0],
-                                                                                                     step=step, env=env,
-                                                                                                     optimize=optimize,
-                                                                                                     after_query=after_query)
+                          optimize=optimize) if not optimize or allow_mappers_only else task_class_selector(
+            raquery.inputs[0],
+            step=step, env=env,
+            optimize=optimize,
+            after_query=after_query)
 
     elif isinstance(raquery, radb.ast.RelRef):
         filename = raquery.rel + ".json"
@@ -147,7 +168,7 @@ def task_factory(raquery, after_query: radb.ast.Node = None, step=1, env=ExecEnv
     elif isinstance(raquery, radb.ast.Rename):
         return RenameTask(querystring=str(raquery) + ";", step=step,
                           exec_environment=env,
-                          optimize=optimize) if not optimize or allow_mappers_only else task_factory(
+                          optimize=optimize) if not optimize or allow_mappers_only else task_class_selector(
             raquery=raquery.inputs[0], env=env, optimize=optimize, after_query=after_query)
 
     else:
@@ -161,10 +182,11 @@ class JoinTask(RelAlgQueryTask):
         raquery = radb.parse.one_statement_from_string(self.querystring)
         assert (isinstance(raquery, radb.ast.Join))
 
-        task1 = task_factory(raquery.inputs[0], step=self.step + 1, env=self.exec_environment, optimize=self.optimize,
-                             after_query=raquery.inputs[0])
-        task2 = task_factory(raquery.inputs[1], step=self.step + count_steps(raquery.inputs[0]) + 1,
-                             env=self.exec_environment, optimize=self.optimize, after_query=raquery.inputs[1])
+        task1 = task_class_selector(raquery.inputs[0], step=self.step + 1, env=self.exec_environment,
+                                    optimize=self.optimize,
+                                    after_query=raquery.inputs[0])
+        task2 = task_class_selector(raquery.inputs[1], step=self.step + count_steps(raquery.inputs[0]) + 1,
+                                    env=self.exec_environment, optimize=self.optimize, after_query=raquery.inputs[1])
 
         self.prev_task1 = type(task1)
         self.prev_task2 = type(task2)
@@ -340,8 +362,8 @@ class SelectTask(RelAlgQueryTask):
     def requires(self):
         raquery = radb.parse.one_statement_from_string(self.querystring)
         assert (isinstance(raquery, radb.ast.Select))
-        prev_task = task_factory(raquery.inputs[0], step=self.step + 1, env=self.exec_environment,
-                                 optimize=self.optimize)
+        prev_task = task_class_selector(raquery.inputs[0], step=self.step + 1, env=self.exec_environment,
+                                        optimize=self.optimize)
         return [prev_task]
 
     def mapper(self, line):
@@ -445,8 +467,8 @@ class RenameTask(RelAlgQueryTask):
     def requires(self):
         raquery = radb.parse.one_statement_from_string(self.querystring)
         assert (isinstance(raquery, radb.ast.Rename))
-        prev_task = task_factory(raquery.inputs[0], step=self.step + 1, env=self.exec_environment,
-                                 optimize=self.optimize)
+        prev_task = task_class_selector(raquery.inputs[0], step=self.step + 1, env=self.exec_environment,
+                                        optimize=self.optimize)
 
         return [prev_task]
 
@@ -495,9 +517,9 @@ class ProjectTask(RelAlgQueryTask):
     def requires(self):
         raquery = radb.parse.one_statement_from_string(self.querystring)
         assert (isinstance(raquery, radb.ast.Project))
-        prev_task = task_factory(raquery.inputs[0], step=self.step + 1, env=self.exec_environment,
-                                 optimize=self.optimize,
-                                 after_query=raquery.inputs[0])
+        prev_task = task_class_selector(raquery.inputs[0], step=self.step + 1, env=self.exec_environment,
+                                        optimize=self.optimize,
+                                        after_query=raquery.inputs[0])
         self.prev_task = type(prev_task)
 
         return [prev_task]

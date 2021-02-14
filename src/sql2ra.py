@@ -39,7 +39,7 @@ def translate(statement: Statement, optimize: bool = False) -> ast.Project:
 
     if renames:
         if optimize:
-            renames.sort(key=lambda val: size_ranking[val[0]])
+            renames.sort(key=lambda val: size_ranking.get(val[0], 0))
         # iterate through tables and parse table names and aliases.
         for (key, value) in renames:
             if key == value:

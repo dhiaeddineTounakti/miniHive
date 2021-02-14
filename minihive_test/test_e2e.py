@@ -37,10 +37,6 @@ class End2EndUnitTests(unittest.TestCase):
 
         task = ra2mr.task_factory(ra4, env=ra2mr.ExecEnv.MOCK, optimize=True, after_query=ra4)
 
-        if isinstance(task, ra2mr.InputData):
-            task = ra2mr.task_factory(ra4, env=ra2mr.ExecEnv.MOCK, optimize=True, after_query=ra4,
-                                      allow_mappers_only=True)
-
         luigi.build([task], local_scheduler=True)
 
         f = task.output().open('r')
