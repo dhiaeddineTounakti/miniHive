@@ -4,7 +4,7 @@ from radb import ast, parse
 from sqlparse.sql import Statement, TokenList, Identifier, IdentifierList, Where
 
 
-def translate(statement: Statement) -> ast.Project:
+def translate(statement: Statement, optimize: bool = False) -> ast.Project:
     """
     translates an sql statement into a relational algebra
     :param statement: sql statement
@@ -13,8 +13,9 @@ def translate(statement: Statement) -> ast.Project:
     :rtype: ast.Project
     """
 
-    # initialize the result object
-    result = None
+    # Initiate the tables size ranking from the smallest to the biggest
+    size_ranking = {'REGION': 0, 'NATION': 1, 'SUPPLIER': 2, 'CUSTOMER': 3, 'PART': 4, 'PARTSUPP': 5, 'ORDERS': 6,
+                    'LINEITEM': 7}
 
     # initialize flags to know in which part of the statement we are right now
     projections = None
@@ -37,6 +38,8 @@ def translate(statement: Statement) -> ast.Project:
         projections = f'\project_{{{projections}}}'
 
     if renames:
+        if optimize:
+            renames.sort(key=lambda val: size_ranking[val[0]])
         # iterate through tables and parse table names and aliases.
         for (key, value) in renames:
             if key == value:
@@ -104,6 +107,7 @@ def get_tables_and_names(tokens: TokenList, index: int) -> list:
                 # if the name does not have an alias
                 if len(name_alias) == 1:
                     result.append((name_alias[0], name_alias[0]))
+                # If the name has an alias
                 else:
                     result.append((name_alias[0], name_alias[1]))
 

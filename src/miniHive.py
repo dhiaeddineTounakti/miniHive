@@ -48,7 +48,7 @@ def eval(sf, env, query, optimize):
     ''' ...................... you may edit code below ........................'''
 
     stmt = sqlparse.parse(query)[0]
-    ra0 = sql2ra.translate(stmt)
+    ra0 = sql2ra.translate(stmt, optimize=optimize)
 
     ra1 = raopt.rule_break_up_selections(ra0)
     ra2 = raopt.rule_push_down_selections(ra1, dd)
@@ -56,6 +56,9 @@ def eval(sf, env, query, optimize):
     ra4 = raopt.rule_introduce_joins(ra3)
 
     task = ra2mr.task_factory(ra4, env=env, optimize=optimize, after_query=ra4)
+
+    if isinstance(task, ra2mr.InputData):
+        task = ra2mr.task_factory(ra4, env=env, optimize=optimize, after_query=ra4, allow_mappers_only=True)
 
     luigi.build([task], local_scheduler=True)
 

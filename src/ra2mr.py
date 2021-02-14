@@ -1,3 +1,4 @@
+import collections
 import json
 from enum import Enum
 from typing import Tuple
@@ -109,12 +110,24 @@ this produces a tree of luigi tasks with the physical query operators.
 '''
 
 
-def task_factory(raquery, after_query: radb.ast.Node = None, step=1, env=ExecEnv.HDFS, optimize=False):
+def task_factory(raquery, after_query: radb.ast.Node = None, step=1, env=ExecEnv.HDFS, optimize=False,
+                 allow_mappers_only=False):
+    """
+    returns the right task class given a query.
+    :param raquery: query
+    :param after_query: query to execute in the reducer
+    :param step: step count
+    :param env: environment where to execute the map reduce tasks
+    :param optimize: flag to set optimization on and off
+    :param allow_mappers_only: if optimization is on then this controls if we allow returning mapper_only tasks or not
+    :return: the given class
+    """
     assert (isinstance(raquery, radb.ast.Node))
 
     if isinstance(raquery, radb.ast.Select):
         return SelectTask(querystring=str(raquery) + ";", step=step,
-                          exec_environment=env, optimize=optimize) if not optimize else task_factory(raquery.inputs[0],
+                          exec_environment=env,
+                          optimize=optimize) if not optimize or allow_mappers_only else task_factory(raquery.inputs[0],
                                                                                                      step=step, env=env,
                                                                                                      optimize=optimize,
                                                                                                      after_query=after_query)
@@ -133,7 +146,8 @@ def task_factory(raquery, after_query: radb.ast.Node = None, step=1, env=ExecEnv
 
     elif isinstance(raquery, radb.ast.Rename):
         return RenameTask(querystring=str(raquery) + ";", step=step,
-                          exec_environment=env, optimize=optimize) if not optimize else task_factory(
+                          exec_environment=env,
+                          optimize=optimize) if not optimize or allow_mappers_only else task_factory(
             raquery=raquery.inputs[0], env=env, optimize=optimize, after_query=after_query)
 
     else:
@@ -152,60 +166,100 @@ class JoinTask(RelAlgQueryTask):
         task2 = task_factory(raquery.inputs[1], step=self.step + count_steps(raquery.inputs[0]) + 1,
                              env=self.exec_environment, optimize=self.optimize, after_query=raquery.inputs[1])
 
+        self.prev_task1 = type(task1)
+        self.prev_task2 = type(task2)
+        self.branche1_relations = None
+        self.branche2_relations = None
+        self.parsed_lines = set()
+
         return [task1, task2]
 
     def mapper(self, line):
         relations, tuple = line.split('\t')
         parsed_tuple = json.loads(tuple)
-
+        list_of_relations_tuples = [(relations, parsed_tuple)]
         raquery = radb.parse.one_statement_from_string(self.querystring)
         condition = raquery.cond
 
+        # If optimize flag is set then consider the case were Join is the first node after Input Data
+        if self.optimize and (self.prev_task1 == InputData or self.prev_task2 == InputData):
+            # Delete the other entries
+            list_of_relations_tuples = []
+            # We need to guess which branch this line is coming from
+            relations_from_line = sorted(relations.split(','))
+            if self.branche1_relations is None:
+                self.branche1_relations = sorted(get_branche_relations(raquery=raquery.inputs[0],
+                                                                       get_renames=self.prev_task1 != InputData))
+
+            if self.branche2_relations is None:
+                self.branche2_relations = sorted(get_branche_relations(raquery=raquery.inputs[1],
+                                                                       get_renames=self.prev_task2 != InputData))
+
+            # If both branches have same relations then process the input on both branches
+            if self.branche1_relations == self.branche2_relations and self.prev_task1 == InputData and self.prev_task2 == InputData and line not in self.parsed_lines:
+                self.parsed_lines.add(line)
+                relations, parsed_tuple = parse_query_tree(relations=relations, tuple=parsed_tuple,
+                                                           raquery=raquery.inputs[0])
+                list_of_relations_tuples.append((relations, parsed_tuple))
+                relations, parsed_tuple = parse_query_tree(relations=relations, tuple=parsed_tuple,
+                                                           raquery=raquery.inputs[1])
+                list_of_relations_tuples.append((relations, parsed_tuple))
+
+            elif self.branche1_relations != self.branche2_relations:
+                # If the previous task is InputData and the branch relations are the same as the relations from the line
+                # Execute the branch operation on this line
+                if self.prev_task1 == InputData and relations_from_line == self.branche1_relations:
+                    relations, parsed_tuple = parse_query_tree(relations=relations, tuple=parsed_tuple,
+                                                               raquery=raquery.inputs[0])
+
+                elif self.prev_task2 == InputData and relations_from_line == self.branche2_relations:
+                    relations, parsed_tuple = parse_query_tree(relations=relations, tuple=parsed_tuple,
+                                                               raquery=raquery.inputs[1])
+
+                list_of_relations_tuples.append((relations, parsed_tuple))
+
         ''' ...................... fill in your code below ........................'''
-        join_attrs = get_join_attr(condition)
-        found_values = []
+        for relations, parsed_tuple in list_of_relations_tuples:
+            # If after chain folding there is still input data do the join mapper operation
+            if relations is not None and parsed_tuple is not None:
+                join_attrs = get_join_attr(condition)
+                found_values = []
 
-        for join_attr in join_attrs:
-            attributes_to_look_for = []
-            if '.' in join_attr:
-                # If the specific form relations.attribute is already there then take the attribute.
-                attributes_to_look_for += [join_attr]
+                for join_attr in join_attrs:
+                    attributes_to_look_for = []
+                    if '.' in join_attr:
+                        # If the specific form relations.attribute is already there then take the attribute.
+                        attributes_to_look_for += [join_attr]
 
-            else:
-                # Generate all possible combinations of relation.attribute for later filtering
-                attributes_to_look_for += [relation + "." + join_attr.name for relation in relations.split(",")]
+                    else:
+                        # Generate all possible combinations of relation.attribute for later filtering
+                        attributes_to_look_for += [relation + "." + join_attr.name for relation in relations.split(",")]
 
-            # Filter the attributes to leave only the significant ones.
-            for attr in attributes_to_look_for:
-                if attr in parsed_tuple:
-                    found_values += [parsed_tuple[attr]]
+                    # Filter the attributes to leave only the significant ones.
+                    for attr in attributes_to_look_for:
+                        if attr in parsed_tuple:
+                            found_values += [parsed_tuple[attr]]
 
-        # Translate the values of the attributes to string
-        found_values = [str(val) for val in found_values]
+                # Translate the values of the attributes to string
+                found_values = [str(val) for val in found_values]
 
-        # Sort the values to avoid arbitrary order problems, you might sometimes get "val1, val2" and some other times
-        # you get "val2, val1" which are two different keys
-        sorted(found_values)
+                # Sort the values to avoid arbitrary order problems, you might sometimes get "val1, val2" and some other times
+                # you get "val2, val1" which are two different keys
+                sorted(found_values)
 
-        if found_values is not None:
-            yield ",".join(found_values), json.dumps([relations, parsed_tuple])
+                if found_values is not None:
+                    yield ",".join(found_values), json.dumps([relations, parsed_tuple])
 
         ''' ...................... fill in your code above ........................'''
 
     def reducer(self, key, values):
-        if self.optimize:
-            after_query = radb.parse.one_statement_from_string(self.after_query)
-
         ''' ...................... fill in your code below ........................'''
-        relations_to_tuples = {}
+        relations_to_tuples = collections.defaultdict(list)
         for value in values:
             rel, tuple = json.loads(value)
-            # Append the tuple to the corresponding relation entry
-            if rel in relations_to_tuples:
-                relations_to_tuples[rel] += [tuple]
-
-            else:
-                relations_to_tuples[rel] = [tuple]
+            # Append the tuple to the corresponding relation entry.
+            # We use sets here to filter duplicates.
+            relations_to_tuples[rel].append(tuple)
 
         combined_key = []
         lists = []
@@ -213,7 +267,7 @@ class JoinTask(RelAlgQueryTask):
             combined_key.append(key)
             lists.append(value)
 
-        combined_key = ",".join(sorted(combined_key))
+        relations = ",".join(sorted(combined_key))
 
         if len(lists) > 1:
             for tuples in lists[0]:
@@ -221,17 +275,37 @@ class JoinTask(RelAlgQueryTask):
                     resulting_tuple = {**tuples, **tuples1}
 
                     if self.optimize:
+                        # Get the query
+                        after_query = radb.parse.one_statement_from_string(self.after_query)
                         # Run the chained mappers
-                        res = parse_query_tree(relations=combined_key, tuple=resulting_tuple, raquery=after_query)
-                        # If we got results forward them otherwise forward nothing
-                        if res is not None:
-                            combined_key, resulting_tuple = res
-                            yield combined_key, json.dumps(resulting_tuple)
+                        relations, resulting_tuple = parse_query_tree(relations=relations, tuple=resulting_tuple,
+                                                                      raquery=after_query)
 
-                    else:
-                        yield combined_key, json.dumps(resulting_tuple)
+                    if relations is not None and resulting_tuple is not None:
+                        yield relations, json.dumps(resulting_tuple)
 
         ''' ...................... fill in your code above ........................'''
+
+
+def get_branche_relations(raquery: radb.ast.Node, get_renames: bool):
+    """
+    Go through a branche and return relation names in that branche or the renames.
+    :param raquery: branche to process
+    :param get_renames: flag to indicate if we want to get renames or not
+    :return:
+    """
+    relations = []
+    # If you encounter a relation name return it
+    if isinstance(raquery, radb.ast.RelRef):
+        return [raquery.rel]
+    # If we want renames then return the first rename that encounters you
+    elif isinstance(raquery, radb.ast.Rename) and get_renames:
+        return [raquery.relname]
+    # Otherwise process branches
+    for input in raquery.inputs:
+        relations += get_branche_relations(raquery=input, get_renames=get_renames)
+
+    return relations
 
 
 def check_all_keys(keys, key_to_look_for):
@@ -275,11 +349,12 @@ class SelectTask(RelAlgQueryTask):
         raquery = radb.parse.one_statement_from_string(self.querystring)
         relations, tuple = line.split('\t')
         parsed_tuple = json.loads(tuple)
-        res = select(relations=relations, tuple=parsed_tuple, raquery=raquery)
+        if self.optimize:
+            relations, parsed_tuple = parse_query_tree(relations=relations, tuple=parsed_tuple, raquery=raquery)
+        relations, parsed_tuple = select(relations=relations, tuple=parsed_tuple, raquery=raquery)
 
         # You should test if the select have returned something or not.
-        if res is not None:
-            relations, parsed_tuple = res
+        if relations is not None and parsed_tuple is not None:
             yield relations, json.dumps(parsed_tuple)
         ''' ...................... fill in your code above ........................'''
 
@@ -293,12 +368,15 @@ def select(relations: str, tuple: dict, raquery: radb.ast.Select) -> Tuple[str, 
     :return: the processed line
     """
     assert isinstance(raquery, radb.ast.Select), f'Something went wrong expecting radb.ast.Select got {type(raquery)}'
-    assert isinstance(tuple, dict), f'Something went wrong expecting dict got {type(tuple)}'
     condition = raquery.cond
+    res_relations, res_tuple = None, None
 
-    for relation in relations.split(","):
-        if test_condition(relation, tuple, condition):
-            return relations, tuple
+    if relations is not None and tuple is not None:
+        for relation in relations.split(","):
+            if test_condition(relation, tuple, condition):
+                res_relations, res_tuple = relations, tuple
+
+    return res_relations, res_tuple
 
 
 def test_condition(relation, parsed_tuple, condition):
@@ -376,15 +454,16 @@ class RenameTask(RelAlgQueryTask):
         raquery = radb.parse.one_statement_from_string(self.querystring)
 
         ''' ...................... fill in your code below ........................'''
-        # Split line into a tuple of relation, attributes
-        relation, tuple = line.split('\t')
+        # Split line into a tuple of relations, attributes
+        relations, tuple = line.split('\t')
         # Get dict from the line attributes
         parsed_tuple = json.loads(tuple)
+        if self.optimize:
+            realtions, parsed_tuple = parse_query_tree(relations=relations, tuple=parsed_tuple, raquery=raquery)
 
-        res = rename(relations=relation, tuple=parsed_tuple, raquery=raquery)
-        if res is not None:
-            relation, tuple = res
-            yield relation, json.dumps(tuple)
+        relations, parsed_tuple = rename(relations=relations, tuple=parsed_tuple, raquery=raquery)
+
+        yield relations, json.dumps(parsed_tuple)
 
         ''' ...................... fill in your code above ........................'''
 
@@ -399,13 +478,16 @@ def rename(relations: str, tuple: dict, raquery: radb.ast.Rename) -> tuple:
     """
     assert isinstance(raquery, radb.ast.Rename), f'Something went wrong expecting radb.ast.Rename got {type(raquery)}'
 
-    tmp_dict = {}
-    for key, value in tuple.items():
-        for relation in relations.split(','):
-            tmp_key = key.replace(relation, raquery.relname)
-            tmp_dict[tmp_key] = value
+    if relations is not None and tuple is not None:
+        tmp_dict = {}
+        for key, value in tuple.items():
+            for relation in relations.split(','):
+                tmp_key = key.replace(relation, raquery.relname)
+                tmp_dict[tmp_key] = value
 
-    return raquery.relname, tmp_dict
+        relations, tuple = raquery.relname, tmp_dict
+
+    return relations, tuple
 
 
 class ProjectTask(RelAlgQueryTask):
@@ -416,6 +498,7 @@ class ProjectTask(RelAlgQueryTask):
         prev_task = task_factory(raquery.inputs[0], step=self.step + 1, env=self.exec_environment,
                                  optimize=self.optimize,
                                  after_query=raquery.inputs[0])
+        self.prev_task = type(prev_task)
 
         return [prev_task]
 
@@ -425,26 +508,31 @@ class ProjectTask(RelAlgQueryTask):
         parsed_tuple = json.loads(tuple)
         raquery = radb.parse.one_statement_from_string(self.querystring)
 
-        tmp_dict = {}
+        if self.optimize and self.prev_task == InputData:
+            relations, parsed_tuple = parse_query_tree(relations=relations, tuple=parsed_tuple,
+                                                       raquery=raquery.inputs[0])
 
-        # Get the attributes for the projection
-        attrs = raquery.attrs
+        if relations is not None and parsed_tuple is not None:
+            tmp_dict = {}
 
-        ''' ...................... fill in your code below ........................'''
-        keys = []
-        for attr in attrs:
-            if attr.rel is not None:
-                keys = [attr.rel + "." + attr.name]
+            # Get the attributes for the projection
+            attrs = raquery.attrs
 
-            else:
-                keys = [relation + "." + attr.name for relation in relations.split(",")]
+            ''' ...................... fill in your code below ........................'''
+            keys = []
+            for attr in attrs:
+                if attr.rel is not None:
+                    keys = [attr.rel + "." + attr.name]
 
-            for key in keys:
-                if key in parsed_tuple:
-                    tmp_dict[key] = parsed_tuple[key]
+                else:
+                    keys = [relation + "." + attr.name for relation in relations.split(",")]
 
-        if len(tmp_dict.keys()) >= 0:
-            yield json.dumps(tmp_dict), relations
+                for key in keys:
+                    if key in parsed_tuple:
+                        tmp_dict[key] = parsed_tuple[key]
+
+            if len(tmp_dict.keys()) >= 0:
+                yield json.dumps(tmp_dict), relations
 
         ''' ...................... fill in your code above ........................'''
 
@@ -461,14 +549,9 @@ class ProjectTask(RelAlgQueryTask):
 
         # Execute the after_query on the temporary value.
         if self.optimize:
-            res = parse_query_tree(raquery=after_query, relations=relations, tuple=tuple)
+            relations, tuple = parse_query_tree(raquery=after_query, relations=relations, tuple=tuple)
 
-            if res is not None:
-                relations, tuple = res
-
-                yield relations, json.dumps(tuple)
-
-        else:
+        if relations is not None and tuple is not None:
             yield relations, json.dumps(tuple)
         ''' ...................... fill in your code above ........................'''
 
