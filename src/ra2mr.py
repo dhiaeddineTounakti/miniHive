@@ -267,7 +267,7 @@ class JoinTask(RelAlgQueryTask):
 
                 # Sort the values to avoid arbitrary order problems, you might sometimes get "val1, val2" and some other times
                 # you get "val2, val1" which are two different keys
-                sorted(found_values)
+                found_values = sorted(found_values)
 
                 if found_values is not None:
                     yield ",".join(found_values), json.dumps([relations, parsed_tuple])
